@@ -19,29 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-DATA LICENCE — PLEASE READ
-
-The source code in this repository is MIT, as above.
-
-The dictionary content shipped in the app is NOT covered by the MIT licence.
-It is derived from Wiktionary, whose text is licensed
-Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0).
-
-https://creativecommons.org/licenses/by-sa/4.0/
-
-Taxonomy data is derived from the Open English WordNet, under the WordNet
-Licence and Creative Commons Attribution 4.0 International (CC BY 4.0).
-
-https://globalwordnet.github.io/english-wordnet/
-
-Because that content is share-alike, a distributed copy of the database must
-carry the same share-alike terms. Full provenance, including every source and
-its licence, is recorded in docs/sources.md and is reproduced in the app.
-
-Attribution:
-  Wiktionary contributors, CC BY-SA 4.0 — https://en.wiktionary.org
-  Open English WordNet team and Princeton WordNet, CC BY 4.0
-    — https://github.com/globalwordnet/english-wordnet
