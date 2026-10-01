@@ -14,12 +14,13 @@ does not need 404 MB.
 | entries (headword × part of speech) | 1,456,903 |
 | senses | 1,745,189 |
 | inflected forms | 880,940 |
-| lexical relations | 103,227 |
+| lexical relations | 270,728 |
+| WordNet senses cross-referenced | 145,695 |
 | attested example sentences | 366,506 |
 | IPA transcriptions | 129,301 |
 | senses with a usage/quality tag | 1,217,027 |
 
-`404.2 MB` on disk, `155.7 MB` compressed in the APK, built in 86 seconds.
+`427.3 MB` on disk, `165.4 MB` compressed in the APK, built in 94 seconds.
 Full measurements in [docs/DATA.md](docs/DATA.md).
 
 ## The rule everything is built around
@@ -50,7 +51,8 @@ The build refuses to be trusted on its own numbers. Ten integrity checks run as
 part of the report, and every one has been tested in both directions — a check
 that cannot fail is worse than no check. Six defects were caught this way,
 including one that would have shipped 106,916 rows of
-`{'word': 'pack', 'source': ...}` into the search index.
+`{'word': 'pack', 'source': ...}` into the search index, and one that silently
+dropped 10,067 taxonomy relations while reporting success.
 
 ## Why the database is copied on first launch
 

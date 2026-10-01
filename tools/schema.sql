@@ -59,22 +59,47 @@ CREATE TABLE form (
 ) WITHOUT ROWID;
 
 -- ---------------------------------------------------------------------------
--- relation: intra-entry lexical relations the source already lists.
--- Note these are the SOURCE's own lists. WordNet's independently-curated
--- taxonomy is a separate table added by tools/import_wordnet.py.
+-- relation: lexical relations, from two independent sources.
+--
+-- src is part of the key on purpose. A relation both Wiktionary and WordNet
+-- record is kept twice, so the app can show that two independent sources agree.
+-- Folding them into one row would discard the only corroboration available for
+-- a relation. src is 'wik' (crowd-edited) or 'wn' (professionally curated).
 --
 -- `target` holds only the word. The source stores each relation as an object
 -- ({"word": ..., "source": ..., "_dis1": ...}); stringifying that object is
 -- how 106,916 rows of "{'word': 'pack', 'source': ...}" got in on the first run.
 -- rel_tags carries the relation's own register flags, e.g. obsolete, historical.
+--
+-- Only relations whose BOTH ends resolve to an entry are stored. A taxonomy with
+-- dangling ends is worse than no taxonomy.
 -- ---------------------------------------------------------------------------
 CREATE TABLE relation (
     entry_id  INTEGER NOT NULL,
     rel       TEXT NOT NULL,            -- antonym hypernym hyponym synonym ...
     target    TEXT NOT NULL,            -- lowercase word ONLY
     rel_tags  TEXT,                     -- register flags on this relation
-    PRIMARY KEY (entry_id, rel, target)
+    src       TEXT NOT NULL,            -- 'wik' crowd-edited | 'wn' curated
+    PRIMARY KEY (entry_id, rel, target, src)
 ) WITHOUT ROWID;
+
+-- ---------------------------------------------------------------------------
+-- wn_sense: WordNet's own definition of a sense.
+--
+-- Deliberately NOT merged into `sense`. Wiktionary and WordNet are independent
+-- opinions on the same words, and keeping them apart means the two can be
+-- compared rather than assumed to agree. This is the only cross-check available
+-- at this corpus size.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS wn_sense (
+    entry_id   INTEGER NOT NULL,
+    sense_no   INTEGER NOT NULL,
+    synset_id  TEXT NOT NULL,
+    wn_gloss   TEXT NOT NULL,
+    wn_example TEXT,
+    PRIMARY KEY (entry_id, sense_no)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_wn_sense ON wn_sense (entry_id);
 
 -- ---------------------------------------------------------------------------
 -- Indexes. entry_lc drives every lookup; form drives inflection resolution.
