@@ -69,4 +69,4 @@ their progress.
 Every source, its licence and its measured scale is in
 [docs/sources.md](docs/sources.md). The code is MIT. The dictionary content is
 **not** — it is derived from Wiktionary (CC BY-SA 4.0) and the Open English
-WordNet (CC BY 4.0). See [LICENSE](LICENSE).
+WordNet (CC BY 4.0). See [LICENSE](LICENSE) and [DATA-LICENCE.md](DATA-LICENCE.md).
