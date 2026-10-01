@@ -1,0 +1,34 @@
+# Build artefacts
+tools/*.db
+tools/*.db-wal
+tools/*.db-shm
+tools/dictionary.db*
+*.sqlite
+*.sqlite-journal
+
+# Source data — never committed. 499 MB compressed, ~24 GB uncompressed.
+# tools/fetch_sources.sh downloads it.
+tools/data/
+tools/*.jsonl
+tools/*.jsonl.gz
+*.xml.gz
+
+# Gradle / Android
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+captures/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
