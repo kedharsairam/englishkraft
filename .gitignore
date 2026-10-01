@@ -32,3 +32,6 @@ captures/
 # OS
 .DS_Store
 Thumbs.db
+# Python bytecode from the data pipeline
+__pycache__/
+*.pyc
