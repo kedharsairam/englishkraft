@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  No cloud backup and no device transfer.
+
+  The database is rebuilt from source by the pipeline, so backing it up would
+  mean shipping 427 MB to Google's servers from a phone that claims to have no
+  network access. The learner's wordbook stays on the device and the device.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+    </device-transfer>
+</data-extraction-rules>

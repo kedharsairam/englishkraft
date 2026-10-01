@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Zero permissions. Not "minimal" — none.
+
+  No INTERNET: the dictionary is local and nothing is ever uploaded.
+  No RECORD_AUDIO: the app never listens. There is no pronunciation scoring,
+  deliberately, because scoring requires a microphone.
+  No storage permissions: the database lives in the app's own internal
+  storage, which needs none.
+
+  This manifest is the claim. If a permission ever appears here, the README's
+  "no permissions" is false and a test must fail.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:name=".EnglishKraftApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.EnglishKraft">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.EnglishKraft">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

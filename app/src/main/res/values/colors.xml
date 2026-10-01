@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches KraftDark.background in ui/Theme.kt. One source of truth for the
+         window background, so the splash and the first frame cannot disagree. -->
+    <color name="kraft_background">#0D1117</color>
+    <color name="kraft_primary">#9CCBFF</color>
+</resources>

@@ -35,3 +35,9 @@ Thumbs.db
 # Python bytecode from the data pipeline
 __pycache__/
 *.pyc
+
+# The 427 MB corpus is a build artefact, never committed. Rebuild it with:
+#   tools/fetch_sources.sh && python3 tools/build_dictionary.py --source ... \
+#     --out app/src/main/assets/dictionary.db
+#   python3 tools/import_wordnet.py --dictionary app/src/main/assets/dictionary.db
+app/src/main/assets/dictionary.db
