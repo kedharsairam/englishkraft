@@ -56,6 +56,9 @@ fun SearchScreen(
     onSubmit: (String) -> Unit,
     onSuggestionClick: (String) -> Unit,
     onOpenReader: () -> Unit,
+    onStartPlacement: () -> Unit,
+    /** True once the learner has a saved level, which changes what the row offers. */
+    placementTaken: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -156,6 +159,29 @@ fun SearchScreen(
                 .fillMaxSize()
                 .testTag("suggestion_list"),
         ) {
+            item(key = "placement") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onStartPlacement)
+                        .padding(vertical = 14.dp)
+                        .testTag("open_placement"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (placementTaken) "Retake the level test" else "What level am I?",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "15 questions",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            }
             item(key = "read") {
                 Row(
                     modifier = Modifier

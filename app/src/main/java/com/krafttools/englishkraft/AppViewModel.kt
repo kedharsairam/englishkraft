@@ -20,6 +20,14 @@ sealed interface AppState {
         val repository: DictionaryRepository,
         val entries: Int,
         val senses: Int,
+        /**
+         * The open database, so a second repository can share this handle.
+         *
+         * The corpus is 451 MB and is opened once for the life of the process.
+         * Opening a second connection for the placement test would mean opening it
+         * twice, which on a phone costs both time and page cache.
+         */
+        val database: android.database.sqlite.SQLiteDatabase,
     ) : AppState
     data class Failed(val reason: String) : AppState
 }
@@ -65,7 +73,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         onSuccess = {
                             db = it
                             _appState.value = AppState.Ready(
-                                DictionaryRepository(it), result.entries, result.senses
+                                DictionaryRepository(it), result.entries, result.senses, it
                             )
                         },
                         onFailure = {

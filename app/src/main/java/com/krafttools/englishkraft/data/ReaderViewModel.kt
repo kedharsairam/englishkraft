@@ -33,6 +33,12 @@ data class ReaderState(
  */
 class ReaderViewModel(
     private val repository: DictionaryRepository,
+    /**
+     * The rank to open at. Passed in from the placement result, or nil-equivalent
+     * when the learner has not been tested — in which case [start] falls back to the
+     * coverage offered on screen.
+     */
+    private val startRank: Int? = null,
 ) : ViewModel() {
 
     private val reader = AdaptiveReader(repository)
@@ -43,10 +49,40 @@ class ReaderViewModel(
     private var job: Job? = null
 
     /** Computes the level thresholds once, then builds a passage. */
+    /**
+     * Computes the level thresholds, opens at the placement level, builds a passage.
+     *
+     * When no placement has been taken the reader opens at 98%, the highest offered,
+     * and the screen says which level it is on. Assuming a level the learner has not
+     * agreed to is the one guess this app is not allowed to make.
+     *
+     * A placement rank that falls between two offered levels snaps to the nearest
+     * one, so the label on screen is always true. Snapping *up* to 98% because 93%
+     * is nearer to it than to 95% would make the label wrong, which is why the
+     * comparison is on absolute distance and the levels are then ordered.
+     */
     fun start() {
         viewModelScope.launch {
             val ranks = withContext(Dispatchers.IO) { reader.ranksFor(reader.LEVELS) }
-            _state.value = _state.value.copy(ranks = ranks)
+            val level = startRank?.let { rank ->
+                // Snap DOWN, by coverage, never by nearest rank.
+                //
+                // Nearest rank is the wrong comparison twice over. A 93% placement
+                // sits at rank 1,443, which is 1,003 from the 95% chip and 658 from the
+                // 90% chip — so nearest rank lands on 90%, fine. But the gaps are not
+                // comparable: 7,627 is 6,184 away from 1,443, which is a different
+                // kind of distance from 1,239 to 204. Comparing ranks across a
+                // five-fold range invites snapping a beginner to 98%.
+                //
+                // Rounding down in coverage guarantees the label on screen is one the
+                // learner has actually reached. Under-shooting costs them a level they
+                // can choose from the chips; over-shooting shows them text they cannot
+                // read, which is the failure this app exists to avoid.
+                reader.LEVELS.filter { candidate ->
+                    (ranks[candidate] ?: Int.MAX_VALUE) <= rank
+                }.maxOrNull() ?: reader.LEVELS.first()
+            } ?: reader.LEVELS.last()
+            _state.value = _state.value.copy(ranks = ranks, level = level)
             load()
         }
     }

@@ -24,6 +24,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.krafttools.englishkraft.data.AppState
 import com.krafttools.englishkraft.data.AppViewModel
 import com.krafttools.englishkraft.data.Lookup
+import com.krafttools.englishkraft.data.PlacementRepository
+import com.krafttools.englishkraft.data.PlacementUiState
+import com.krafttools.englishkraft.data.PlacementViewModel
+import com.krafttools.englishkraft.data.Progress
 import com.krafttools.englishkraft.data.ReaderViewModel
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -51,6 +55,11 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
         // sealed value rather than a NavHost.
         var onReader by remember { mutableStateOf(false) }
         var readerVm by remember { mutableStateOf<ReaderViewModel?>(null) }
+        // Placement is a third destination. The saved level feeds the reader, which is
+        // the whole reason to take it: without it the reader assumes 98%, which is
+        // wrong for a beginner.
+        var placementState by remember { mutableStateOf<PlacementUiState?>(null) }
+        var placementVm by remember { mutableStateOf<PlacementViewModel?>(null) }
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
         val search by viewModel.search.collectAsStateWithLifecycle()
@@ -101,6 +110,62 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                 )
 
                 is AppState.Ready -> {
+                    val placementHolder = placementVm
+                    val progress = Progress.get(LocalContext.current)
+                    if (placementHolder != null) {
+                        BackHandler { placementVm = null; placementState = null }
+                        when (val ps = placementState) {
+                            is PlacementUiState.Asking -> PlacementScreen(
+                                question = ps.question,
+                                index = ps.index,
+                                total = ps.total,
+                                chosen = ps.chosen,
+                                onAnswer = { picked ->
+                                    // Answering and advancing happen off the main
+                                    // thread: building the next question reads the
+                                    // corpus, and 15 questions of a janky spinner is
+                                    // worse than one slow first question.
+                                    scope.launch {
+                                        val nextState = withContext(Dispatchers.IO) {
+                                            if (ps.chosen == null) {
+                                                placementHolder.answer(picked)
+                                            } else {
+                                                placementHolder.advance()
+                                            }
+                                        }
+                                        placementState = nextState
+                                    }
+                                },
+                                onFinish = {
+                                    scope.launch {
+                                        placementState = withContext(Dispatchers.IO) {
+                                            placementHolder.advance()
+                                        }
+                                    }
+                                },
+                            )
+                            is PlacementUiState.Done -> PlacementResult(
+                                result = ps.result,
+                                onRead = {
+                                    readerVm = ReaderViewModel(
+                                        state.repository,
+                                        progress.vocabularyRank,
+                                    )
+                                    placementVm = null
+                                    placementState = null
+                                },
+                                onRetake = {
+                                    placementHolder.reset()
+                                    scope.launch {
+                                        placementState = withContext(Dispatchers.IO) {
+                                            placementHolder.next()
+                                        }
+                                    }
+                                },
+                            )
+                            else -> Unit
+                        }
+                    } else {
                     val readerState = readerVm?.state?.collectAsState()
                     val readerViewModel = readerVm
                     if (readerViewModel != null) {
@@ -114,7 +179,12 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                                 unknown = rs.passage?.unknown.orEmpty(),
                                 knownRank = rs.knownRank ?: 0,
                                 loading = rs.loading,
-                                onLevelChange = { readerViewModel.setLevel(it.toDouble()) },
+                                onLevelChange = {
+                                // Choosing a level by hand is how the placement result
+                                // is overridden, and it is remembered: a learner who
+                                // says "that is too hard" means it.
+                                readerViewModel.setLevel(it.toDouble())
+                            },
                                 onNewPassage = readerViewModel::another,
                                 onWordClick = ::open,
                             )
@@ -128,9 +198,20 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                             onSubmit = ::open,
                             onSuggestionClick = ::open,
                             onOpenReader = {
-                                readerVm = ReaderViewModel(state.repository)
+                                readerVm = ReaderViewModel(state.repository, progress.vocabularyRank)
                                 onReader = true
                             },
+                            onStartPlacement = {
+                                placementVm = PlacementViewModel(
+                                    PlacementRepository(state.database),
+                                    progress,
+                                ).also { vm ->
+                                    scope.launch {
+                                        placementState = withContext(Dispatchers.IO) { vm.next() }
+                                    }
+                                }
+                            },
+                            placementTaken = progress.takenAt > 0L,
                         )
                     } else {
                         EntryScreen(
@@ -147,8 +228,8 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
         }
     }
 }
-
-/**
+}
+ /**
  * Text to speech on the device.
  *
  * On-device only: the engine is part of the phone, so this costs no network
