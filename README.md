@@ -15,13 +15,45 @@ does not need 404 MB.
 | senses | 1,745,189 |
 | inflected forms | 880,940 |
 | lexical relations | 270,728 |
-| WordNet senses cross-referenced | 145,695 |
+| WordNet senses cross-referenced | 144,986 |
 | attested example sentences | 366,506 |
 | IPA transcriptions | 129,301 |
 | senses with a usage/quality tag | 1,217,027 |
 
-`427.3 MB` on disk, `165.4 MB` compressed in the APK, built in 94 seconds.
+`451.3 MiB` on disk, `171.6 MiB` compressed inside the APK (the release APK is
+172.8 MiB), built in 86 seconds.
 Full measurements in [docs/DATA.md](docs/DATA.md).
+
+## What the app does
+
+| | |
+|---|---|
+| **Search** | Every headword and every inflected form, ordered by how often the word is actually used. `running` finds `run`. |
+| **Read** | A passage built from sentences you can already read, at a level the app measures rather than asks for. Words above it are tap-to-define. |
+| **Placement test** | 15 objective questions: one word, four glosses from the corpus, one correct. Answers "what level am I?" with a coverage figure, never a grade. |
+| **Wordbook** | Save any word from its entry. It keeps the sense you were reading and a usage sentence that genuinely contains the word. |
+| **Review** | Spaced repetition over your saved words, scheduled by FSRS — the model Anki has driven since 2022, ported from its reference implementation. Each button says what it will do: *this session*, *2 days*, *8 days*. |
+| **Speech** | On-device text to speech. The engine is part of the phone, so it costs no permission and no downloaded model. |
+
+Everything above is local. There is no account, no sync, no analytics, and no network
+permission to abuse even if there were.
+
+### How the scheduling works
+
+A saved word is only put on a schedule once it has been **recalled**. Before that the
+answer is written to a review log, the schedule is left untouched, and the word comes
+back later in the same sitting. This is the one place the app departs from FSRS, and it
+is deliberate: the usual alternative is a learning step of "again in ten minutes",
+which assumes you still have the app open in ten minutes. A learner who reviews twice
+a week never does.
+
+Every answer is kept, so the schedule can be recomputed from the log and checked.
+
+### Where your data lives
+
+Two files. `dictionary.db` is the read-only corpus, replaced whenever the corpus is
+rebuilt. `progress.db` is yours: saved words, their schedule, and every answer. They are
+separate so that rebuilding the dictionary can never cost you your wordbook.
 
 ## The rule everything is built around
 

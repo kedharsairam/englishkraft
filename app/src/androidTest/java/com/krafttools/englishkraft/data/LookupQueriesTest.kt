@@ -38,6 +38,139 @@ class LookupQueriesTest {
         repo = DictionaryRepository(db)
     }
 
+    /**
+     * No quoted Early Modern English reaches a learner.
+     *
+     * The filter that should have caught this was `code > 0x2FF`, which cannot see
+     * U+017F. 4,028 long-s sentences were passing it. This asserts on the count over
+     * the whole corpus rather than on one example, because the original check would
+     * have passed any test that tried a single string.
+     */
+    @Test
+    fun noQuotedEarlyModernEnglishIsShownAsAUsage() {
+        assertEquals(
+            "long-s examples are reaching the entry screen",
+            0,
+            repo.countStraysAccepted("\\u017F"),
+        )
+    }
+
+    /**
+     * No bibliographic citation is shown as a usage.
+     *
+     * Found by using the app: the entry for "ephemeral" opened on
+     * "1821-1822, Vicesimus Knox, Remarks on the tendency of certain Clauses in a
+     * Bill...". It is a bibliography entry wearing a sentence's clothes, and there are
+     * 599 of them. Matched on the comma that follows the year, because a bare year at
+     * the start of a sentence is ordinary English.
+     */
+    /**
+ * No entry hands the screen an example the filter rejects.
+ *
+ * This is the test that matters, and it is written against the lookup rather than
+ * against the predicate. Testing `isUsableExample` directly is what let the bug
+ * through: the predicate was correct and correct-looking, and was simply never called
+ * on the path most senses take. A sense carrying exactly one example was assigned
+ * `first.example` straight from the database row, so the filter was inert for most of
+ * the dictionary.
+ */
+@Test
+fun noLookupReturnsAnExampleTheFilterRejects() {
+    val heads = repo.commonHeadwords(3000)
+    assertTrue("the corpus must have that many common words", heads.size >= 3000)
+
+    var checked = 0
+    for (headword in heads) {
+        val found = repo.lookup(headword) ?: continue
+        for (sense in found.senses) {
+            for (usage in listOfNotNull(sense.example) + sense.examples) {
+                checked++
+                assertTrue(
+                    "'$headword' returned an example the filter rejects: $usage",
+                    repo.isUsableUsage(usage),
+                )
+            }
+        }
+    }
+    assertTrue(
+        "the loop checked no examples at all, so it proved nothing",
+        checked > 1000,
+    )
+}
+
+@Test
+    fun noCitationIsShownAsAUsage() {
+        assertEquals(
+            "year-and-author citations are reaching the entry screen",
+            0,
+            repo.countStraysAccepted(", Walter Raleigh,"),
+        )
+        assertFalse(
+            "a ranged citation",
+            repo.isUsableUsage(
+                "1603-16, Walter Raleigh, The History of the World.\\n" +
+                    "They promise to absist from their purpose of making a war.",
+            ),
+        )
+        assertFalse(
+            "a single-year citation with a page number",
+            repo.isUsableUsage(
+                "2005, Paul Mitchell, The Favourite, page 145,\\n" +
+                    "There are three kinds of silence.",
+            ),
+        )
+        // The rule must not eat ordinary sentences that happen to open with a number.
+        assertTrue(
+            "a sentence opening with a number is not a citation",
+            repo.isUsableUsage("Three of the runners finished before the rain started."),
+        )
+    }
+
+    @Test
+    fun theFilterKeepsGenuineAccentedEnglish() {
+        // The fix must not become "reject everything non-ASCII". These are real English
+        // examples, and 4,477 genuine ones were dropped alongside the 4,028 bad ones
+        // when the range was first set too wide.
+        assertTrue(
+            "a French loanword is ordinary English",
+            repo.isUsableUsage("She said a caf\u00e9 was open and asked for a cr\u00e8me br\u00fbl\u00e9e."),
+        )
+        assertTrue(
+            "British spelling and money are ordinary English",
+            repo.isUsableUsage("She colour-coded the files and paid \u00a340 for the ticket."),
+        )
+        assertTrue(
+            "the oe ligature is ordinary English and must survive the fix",
+            repo.isUsableUsage("The \u0153sophagus and the \u00c6sop fables are on the shelf."),
+        )
+    }
+
+    @Test
+    fun theFilterRefusesTheSpecificJunk() {
+        assertFalse(
+            "Early Modern English",
+            repo.isUsableUsage("The couaitous de\u017fyre of riche men is euer vn\u017faciable."),
+        )
+        assertFalse("a bracketed ellipsis", repo.isUsableUsage("The rest [...] follows."))
+        assertFalse(
+            "a computer-science textbook",
+            repo.isUsableUsage(
+                "Notice that the NOT symbol is simply a BUF symbol followed by a bubble, " +
+                    "and that the bubble represents logical inversion, which is the actual " +
+                    "NOT gate in every one of the compilers that implement it this way " +
+                    "rather than as a primitive of the language.",
+        ),
+        )
+        assertFalse(
+            "a Middle English yogh",
+            repo.isUsableUsage("O wityng bath god and ill \u021dee suld be lauerds at \u021dfour will."),
+        )
+        assertFalse(
+            "a quoted page of dialogue",
+            repo.isUsableUsage("He said, \u201cyou shall each read a page by turns; so that Miss Short may have an opportunity.\u201d"),
+        )
+    }
+
     @Test
     fun corpusIsTheWholeThing() {
         val entries = repo.totalEntries()

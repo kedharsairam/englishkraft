@@ -225,7 +225,15 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
         }
 
     private fun collapse(rows: List<Sense>): List<Sense> {
-        if (rows.size < 2) return rows
+        // No early return for a single sense. There used to be one -- `if (rows.size < 2)
+// return rows` -- and it meant a word with exactly one sense had its example shown
+// straight from the database row, unfiltered. Most words in a dictionary have one
+// sense, so the whole example filter was reaching only the minority, and every test
+// written against the predicate itself passed while the screen showed quotations,
+// citations and phonetics papers.
+//
+// The merge below is a no-op for a single row apart from renumbering it to 1, which
+// is what a one-sense entry already is.
         val order = LinkedHashMap<String, MutableList<Sense>>()
         for (s in rows) {
             // Keyed on the gloss ALONE, not (gloss, tags). Wiktionary separates one sense by
@@ -251,7 +259,15 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
                 // de-duplicated so the same flag never appears twice.
                 tags = group.flatMap { it.tags }.distinct().sorted(),
                 examples = if (examples.size > 1) examples else emptyList(),
-                example = if (examples.size > 1) null else first.example,
+                // From the filtered list, never from the row. This used to be
+                // `first.example`, which meant that a sense carrying exactly one example
+                // skipped the filter entirely -- and most senses carry exactly one. So
+                // `isUsableExample` was inert on the common path, and the entry for
+                // "ephemeral" led with a citation from 1821 despite every check passing.
+                //
+                // A test that exercised the predicate directly could not have found this:
+                // the predicate was correct, and simply not consulted.
+                example = if (examples.size > 1) null else examples.firstOrNull(),
             )
         }
     }
@@ -336,25 +352,175 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
     /** "d.j", "u.s", "a.m" — single letters separated by periods. */
     private val ABBREVIATION = Regex("^[A-Za-z]\\.[A-Za-z]$")
 
+    /**
+ * The [limit] most frequent headwords, most frequent first.
+ *
+ * Used by the test that walks the wordbook's usage filter across the range of words a
+ * learner actually meets. A filter checked against five words proves nothing: the
+ * failures live in the common words, and they are common.
+ */
+    fun commonHeadwords(limit: Int): List<String> =
+        db.rawQuery(
+            "SELECT headword_lc FROM entry WHERE freq_rank IS NOT NULL " +
+                "ORDER BY freq_rank ASC LIMIT ?",
+            arrayOf(limit.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+
+    /**
+     * Every figure the README's table reports, read from the corpus on the device.
+     *
+     * One query per row rather than reading `sqlite_stat1`, because the table a reader
+     * checks is the table this returns. Used by `CorpusFiguresTest`, which holds the
+     * same numbers as literals so that a corpus change fails a test instead of quietly
+     * making the README wrong.
+     */
+    fun corpusFigures(): Map<String, Int> = mapOf(
+        "entries" to count("entry"),
+        "senses" to count("sense"),
+        "forms" to count("form"),
+        "relations" to count("relation"),
+        "wordnet senses cross-referenced" to count("wn_sense"),
+        "attested example sentences" to count("sense", "example IS NOT NULL"),
+        "IPA transcriptions" to count("entry", "ipa IS NOT NULL"),
+        "senses with a usage/quality tag" to count("sense", "tags IS NOT NULL AND tags != ''"),
+        "entries with etymology text" to
+            count("entry", "etymology IS NOT NULL AND etymology != ''"),
+        "wordnet relations" to count("relation", "src = 'wn'"),
+        "wiktionary relations" to count("relation", "src = 'wik'"),
+    )
+
+    private fun count(table: String, where: String = "1=1"): Int =
+        db.rawQuery("SELECT count(*) FROM $table WHERE $where", null)
+            .use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    /**
+     * Counts examples containing [needle] that this class's filter still accepts.
+     *
+     * A regression guard with a number in it. Two example filters here were written and
+     * then measured, and both were wrong in a way a single-example test could not have
+     * caught:
+     *
+     * - `code > 0x2FF` cannot see U+017F, so 4,028 quoted Early Modern sentences were
+     *   reaching learners on the entry screen.
+     * - Nothing rejected a bibliographic citation, so the entry for "ephemeral" led
+     *   with "1821-1822, Vicesimus Knox, Remarks on the tendency of certain Clauses in
+     *   a Bill...". 599 examples are citations of that shape.
+     *
+     * The predicate runs here in Kotlin rather than being restated in SQL. A first
+     * attempt wrote the filter out as a WHERE clause, which is how a test ends up
+     * checking a second implementation instead of the one that ships -- and that one
+     * omitted the character test entirely and reported 4,573 strays after the fix.
+     *
+     * [needle] is matched with `instr`, not `LIKE`: SQLite treats a backslash in a LIKE
+     * pattern as an escape, so a literal "%\u017F%" matches every example containing a
+     * "u" and reports 204,059.
+     */
+    fun countStraysAccepted(needle: String): Int {
+        val strays = db.rawQuery(
+            "SELECT example FROM sense WHERE instr(example, ?) > 0",
+            arrayOf(needle),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        return strays.count { isUsableExample(it) }
+    }
+
+    /**
+     * Whether [text] is a demonstration of a word rather than something else entirely.
+     *
+     * The same rule the entry screen applies to an example before showing it. The
+     * wordbook applies it too, and not for tidiness: measured over the first sense of
+     * the 3000 commonest words, 997 of those examples are longer than a sentence,
+     * carry the long-s of early printed English, or elide with a bracketed ellipsis —
+     * a CS textbook, a page of quoted dialogue, a citation. A card that stores one and
+     * shows it beside the word teaches the learner that a computer-science manual
+     * defines it.
+     */
+    fun isUsableUsage(text: String): Boolean = isUsableExample(text)
+
+
     private fun isUsableExample(text: String): Boolean {
         // An ellipsis marks an elided quotation rather than a sentence of usage.
         if (text.contains("[...]") || text.contains("[…]")) return false
         // Footnote and citation markers come from printed sources.
         if (CITATION_MARKER.containsMatchIn(text)) return false
+        // A bibliographic citation: a year or year range, then an author.
+        //
+        // "1603-16, Walter Raleigh, The History of the World." and "1886, Mary Noelles
+        // Murfree (as Charles Egbert Craddock), In the Clouds, Chapter 17, p. 248," are
+        // attributions, not demonstrations of the word. Shown to a learner as a usage
+        // they say the word is defined by a book title, which is the sort of thing a
+        // learner believes and never checks.
+        //
+        // Found by using the app: the entry for "ephemeral" led with
+        // "1821-1822, Vicesimus Knox, Remarks on the tendency of certain Clauses in a
+        // Bill...". Every one of these passed every other check, which is why they
+        // needed counting rather than reasoning. 599 of the 216,253 examples the
+        // other rules accept are citations of this shape.
+        //
+        // The comma is followed by a capital letter or an opening bracket, because a
+        // bare "1856," is not enough on its own. The year must be three or four digits
+        // so an ordinary sentence opening with a small number survives.
+        if (YEAR_CITATION.containsMatchIn(text)) return false
         // Real demonstrations are short. A long passage is quoted prose.
         if (text.length > MAX_EXAMPLE_CHARS) return false
         if (text.count { it == '.' } > MAX_EXAMPLE_SENTENCES) return false
-        // Non-Latin letters. 11,190 examples are quoted from early printed English and
-        // carry the long-s (ſ), so "ſhallbe" reads as one unlookable word. In a
-        // learning app that teaches a learner ſ is a letter of the alphabet, which
-        // is false in modern English. The usage tags do not identify these -- the
-        // senses are often tagged plain "transitive" -- so the character test is the
-        // only reliable filter. The text stays in the database; it is not shown.
-        if (text.any { it.code > 0x2FF }) return false
+        // Historical orthography, and non-Latin scripts.
+        //
+        // 11,190 examples are quoted from Early Modern or Middle English and carry the
+        // long-s, so "aſſaulted" and "Ȝe ne haue na more meryte" reach the learner as
+        // usage. In an app that teaches, ſ and yogh being letters of the alphabet is a
+        // falsehood: no learner will ever need to type either. The register tags do not
+        // identify these -- the senses are often tagged plain "transitive" -- so a
+        // character test is the only reliable filter. The text stays in the corpus; it
+        // is not shown.
+        //
+        // An earlier test here was `code > 0x2FF`, on the belief that it caught the
+        // long-s. It cannot: ſ is U+017F, below 0x2FF. Measured, 4,028 long-s examples
+        // were reaching learners on the entry screen.
+        //
+        // The first fix rejected the whole of Latin Extended-A and B, U+0100 to
+        // U+024F. That was too wide and an instrumented test caught it: it also rejects
+        // oe-ligature, which is ordinary English spelling in "oesophagus". The set below
+        // is what the corpus actually needed, chosen by counting the characters in the
+        // examples this filter already accepts:
+        //
+        //     ſ  14,795   long s, Early Modern English
+        //     ā    90   macron, transliteration ("Imam al-Mahdi", "Karā Khitāi")
+        //     ō    71   macron, the same
+        //     ū    35   macron, the same
+        //     ȝ    23   yogh, Middle English
+        //     ī    22   macron, the same
+        //     ē    21   macron, the same
+        //     ǃ    13   click, a linguistics paper about !Xung
+        //     ı    10   dotless i, Turkish
+        //
+        // and it deliberately keeps the loanword letters that share those blocks:
+        // œ Œ (12 and 169 uses), ł, ć, č, š, ž, ń, ș, ğ and the rest. Those are
+        // ordinary English words spelled with letters English borrowed, and a filter
+        // that removed them would be removing the language rather than the damage.
+        if (text.any { it.code > 0x2FF || it in HISTORICAL_LETTERS }) return false
         return true
     }
 
     private val CITATION_MARKER = Regex("\\[\\d+\\]")
+
+    /** A leading year or year range followed by an author: a citation, not a usage. */
+    private val YEAR_CITATION =
+        Regex("^\\s*\\(?\\d{3,4}\\s*[-\u2013\u2014]?\\s*\\(?\\d{0,4}\\)?\\s*,\\s*(?:\\[|[A-Z])")
+
+    /**
+     * Letters that are not letters of modern English.
+     *
+     * Written as escapes so this file stays ASCII and the set cannot be corrupted by
+     * an editor that "helpfully" normalises a character it does not recognise.
+     */
+    private val HISTORICAL_LETTERS = setOf(
+        '\u017F', // long s
+        '\u021C', '\u021D', // yogh, capital and small
+        '\u0101', '\u0113', '\u012B', '\u014D', '\u016B', // a e i o u with macron
+        '\u0100', '\u0112', '\u012A', '\u014C', '\u016A', // A E I O U with macron
+        '\u0131', // dotless i
+        '\u01C1', '\u01C2', '\u01C3', // lateral, alveolar and retroflex clicks
+    )
     private val MAX_EXAMPLE_CHARS = 220
     private val MAX_EXAMPLE_SENTENCES = 2
 
@@ -364,6 +530,37 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
             "SELECT form FROM form WHERE entry_id = ? ORDER BY form LIMIT 24",
             arrayOf(entryId.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+
+    /**
+     * Whether [text] actually contains this entry, in any of its inflected forms.
+     *
+     * Matched on word boundaries and against the `form` table rather than by substring,
+     * and both choices are load-bearing:
+     *
+     * - Substring matching finds `in` inside `running` and `inside`, so it would show a
+     *   learner a "usage" for a word that never appears in the sentence, and they would
+     *   learn the two belong together.
+     * - Inflection matters because a usage example for `run` will very often show `runs`,
+     *   `ran` or `running`. Requiring the headword exactly would reject most good
+     *   examples and leave the learner with no usage at all.
+     *
+     * The boundary rule is the reader's, so a word this reports is a word the reader
+     * would also have made tappable.
+     */
+    fun containsWord(text: String, entryId: Long): Boolean {
+        // 880,940 forms for 1,456,903 entries, so some entries record none. Those are
+        // exactly the words a learner might save, and dropping their usage because the
+        // corpus is thin would be a loss that has nothing to do with the word.
+        val candidates = formsOf(entryId).toMutableSet()
+        headwordOf(entryId)?.let { candidates.add(it) }
+        if (candidates.isEmpty()) return false
+        return wordsIn(listOf(text)).any { it in candidates }
+    }
+
+    private fun headwordOf(entryId: Long): String? =
+        db.rawQuery(
+            "SELECT headword_lc FROM entry WHERE id = ?", arrayOf(entryId.toString()),
+        ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
 
     /**
      * Relations recorded for this entry, corroborated ones first.

@@ -14,12 +14,12 @@ python3 tools/build_dictionary.py --report-only --out dictionary.db
 | entries (headword × part of speech) | **1,456,903** |
 | senses | **1,745,189** |
 | inflected forms | **880,940** |
-| relations | **270,728** — 98,301 from Wiktionary, 172,447 from WordNet |
+| relations | **270,728** — 103,227 from Wiktionary, 167,501 from WordNet |
 | senses carrying a usage tag | 1,217,027 |
 | senses with an attested example | 366,506 |
 | entries with an IPA transcription | 129,301 |
 | entries with etymology text | 519,738 |
-| WordNet senses matched | 145,695 |
+| WordNet senses matched | 144,986 |
 
 ## Taxonomy coverage
 
@@ -29,7 +29,7 @@ The Open English WordNet 2025 edition is imported by `tools/import_wordnet.py`.
 |---|---|
 | synsets | 107,519 |
 | lexical entries | 135,969 |
-| relations resolved end-to-end | **172,447** |
+| WordNet relations stored | **167,501** |
 | entries with a WordNet gloss | 96,796 (71.2% of WordNet lemmas) |
 | entries with **both** a Wiktionary and a WordNet gloss | **96,653** |
 | relations **both** sources record independently | **3,140** |
@@ -64,8 +64,8 @@ stored directly while its hypernym is derived by reverse lookup. Verified:
 
 | | |
 |---|---|
-| `dictionary.db` on disk | **427.3 MB** |
-| gzipped — what the APK carries | **165.4 MB** |
+| `dictionary.db` on disk | **451.3 MiB** (473,210,880 bytes) |
+| DEFLATE-compressed — what the APK carries | **171.6 MiB** |
 | build time, full extract | 86 s (+8 s WordNet import) |
 | total device footprint (APK + extracted copy) | ~590 MB |
 
