@@ -21,13 +21,17 @@ android {
     }
 
     androidResources {
-        // dictionary.db is already compressed on disk by SQLite page layout and
-        // by the aapt2 deflate pass. Forcing noCompress would make the APK the
-        // size of the database instead of a third of it, for no gain: the file is
-        // copied to internal storage on first launch rather than opened in place
-        // (SQLiteDatabase.openDatabase(FileDescriptor, ...) is not in the public
-        // SDK), so compressed-in-APK costs one decompression pass at install.
-        noCompress += listOf("db")
+        // Deliberately NOT adding "db" to noCompress.
+        //
+        // Forcing it made the debug APK 895 MB instead of ~450, because the asset was
+        // stored uncompressed and the database is the whole app. The rule that
+        // seemed to require it was about `AssetManager.openFd`, which throws on a
+        // compressed asset — but DictionaryInstaller sizes the asset by streaming it
+        // and copies it by streaming it, and both work on a compressed asset. The two
+        // requirements contradicted each other and only the streaming path is used.
+        //
+        // Verified in the APK itself: assets/dictionary.db was STORED at 450.0 MB
+        // before this change. Measure the APK, do not reason about it.
     }
 
     buildTypes {

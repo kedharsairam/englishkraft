@@ -288,6 +288,13 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
         // Real demonstrations are short. A long passage is quoted prose.
         if (text.length > MAX_EXAMPLE_CHARS) return false
         if (text.count { it == '.' } > MAX_EXAMPLE_SENTENCES) return false
+        // Non-Latin letters. 11,190 examples are quoted from early printed English and
+        // carry the long-s (ſ), so "ſhallbe" reads as one unlookable word. In a
+        // learning app that teaches a learner ſ is a letter of the alphabet, which
+        // is false in modern English. The usage tags do not identify these -- the
+        // senses are often tagged plain "transitive" -- so the character test is the
+        // only reliable filter. The text stays in the database; it is not shown.
+        if (text.any { it.code > 0x2FF }) return false
         return true
     }
 
@@ -463,6 +470,156 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
             arrayOf(key, key),
         ).use { it.moveToFirst() }
     }
+
+    /**
+     * Corpus frequency rank for a word, or null when it was never attested.
+     *
+     * Null is the honest answer for the long tail: OpenSubtitles records 344,974 of
+     * the dictionary's headwords, and a word it never saw has no rank. Callers must
+     * treat null as "not known" rather than as "rare" — the two are different and
+     * confusing them would mark half the dictionary as hard.
+     */
+    fun rankOf(word: String): Int? {
+        val key = normalise(word)
+        if (key.isEmpty()) return null
+        return db.rawQuery(
+            "SELECT MIN(freq_rank) FROM entry WHERE headword_lc = ? AND freq_rank IS NOT NULL",
+            arrayOf(key),
+        ).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getInt(0) else null }
+    }
+
+    /**
+     * The rank whose cumulative share of attested tokens first reaches [target].
+     *
+     * Walks the index in rank order and stops at the threshold, so the cost is
+     * proportional to the coverage asked for rather than to the corpus size.
+     */
+    fun rankCovering(target: Double): Int? {
+        val total = db.rawQuery(
+            "SELECT COALESCE(SUM(corpus_count), 0) FROM entry WHERE corpus_count IS NOT NULL",
+            null,
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
+        if (total <= 0L) return null
+        val want = total * target
+
+        return db.rawQuery(
+            """
+            SELECT freq_rank, SUM(corpus_count) OVER (ORDER BY freq_rank) AS running
+            FROM entry WHERE corpus_count IS NOT NULL
+            ORDER BY freq_rank
+            """.trimIndent(),
+            null,
+        ).use { c ->
+            var seen = Int.MIN_VALUE
+            while (c.moveToNext()) {
+                val rank = c.getInt(0)
+                // One rank can appear on several rows (a word with several parts of
+                // speech), so only consider it once its whole group has been counted.
+                if (rank == seen) continue
+                if (c.getLong(1) >= want) return@use rank
+                seen = rank
+            }
+            null
+        }
+    }
+
+    /**
+     * A passage of ordinary English the reader can attempt at [knownRank].
+     *
+     * Sentences are drawn from the corpus's attested examples, so every word is real
+     * usage and nothing is invented. Sentences where more than a third of the words
+     * are unknown are rejected: those are walls of glosses, not passages, and the
+     * point of the reader is a text that reads.
+     *
+     * ORDER BY example rather than RANDOM, so the same passage comes back on every
+     * launch until the learner has dealt with it. A reader that reshuffles itself
+     * cannot be resumed.
+     */
+    fun readingPassages(knownRank: Int, limit: Int = 6): List<String> {
+        val out = ArrayList<String>()
+        for (sentence in candidateSentences()) {
+            if (out.size >= limit) break
+            val tokens = splitForRead(sentence, knownRank)
+            if (tokens.isEmpty()) continue
+            if (tokens.count { !it.known } > tokens.size / 3) continue
+            out.add(sentence)
+        }
+        return out
+    }
+
+    /**
+     * Candidate sentences for the reader.
+     *
+     * Excluded here rather than by [isUsableExample] because this query wants a
+     * wide pool to filter, not one screen's worth: 4,000 candidates, and the level
+     * filter then keeps whichever suit the learner.
+     */
+    private fun candidateSentences(): List<String> =
+        db.rawQuery(
+            """
+            SELECT DISTINCT example FROM sense
+            WHERE example IS NOT NULL
+              AND LENGTH(example) BETWEEN 55 AND 200
+              AND instr(example, '[...]') = 0
+              AND instr(example, 'ſ') = 0
+            ORDER BY example
+            LIMIT 4000
+            """.trimIndent(),
+            null,
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0).trim()) } }
+
+    /** A word as the reader classifies it. */
+    data class ReadToken(val text: String, val bare: String, val known: Boolean)
+
+    /**
+     * Splits a sentence into words, marking those above [knownRank].
+     *
+     * Shares its boundary rule with the tap targets on purpose: a word the reader
+     * marks unknown must be a word the app can look up, or the reader asks for
+     * glosses the app cannot supply. Stray brackets are dropped for the same
+     * reason — they are citation markers, not vocabulary.
+     */
+    fun splitForRead(sentence: String, knownRank: Int): List<ReadToken> {
+        val out = ArrayList<ReadToken>()
+        var i = 0
+        val len = sentence.length
+        while (i < len) {
+            val ch = sentence[i]
+            if (!ch.isLetter() && ch != '\'') {
+                var j = i
+                while (j < len && !sentence[j].isLetter() && sentence[j] != '\'') j++
+                i = j
+                continue
+            }
+            val start = i
+            while (i < len) {
+                val c = sentence[i]
+                if (c.isLetter() || c == '\'') {
+                    i++
+                    continue
+                }
+                if ((c == '-' || c == '.') && i + 1 < len && sentence[i + 1].isLetter()) {
+                    i += 2
+                    continue
+                }
+                break
+            }
+            val raw = sentence.substring(start, i)
+            val bare = raw.trim('\'', '-', '.')
+            // Anything outside the Latin range is a non-word for a modern reader.
+            val isWord = bare.length >= 2 &&
+                bare.any { it.isLowerCase() } &&
+                bare.none { it.code > 0x2FF }
+            if (!isWord) continue
+            val r = rankOf(bare)
+            out.add(ReadToken(raw, bare, r != null && r <= knownRank))
+        }
+        return out
+    }
+
+    /** The unknown words in a sentence, for the reader's glossary line. */
+    fun unknownWords(sentence: String, knownRank: Int): List<String> =
+        splitForRead(sentence, knownRank).filter { !it.known }.map { it.bare }
 
     /** Every headword, for building the reader's vocabulary profile. */
     fun allHeadwords(): List<String> =
