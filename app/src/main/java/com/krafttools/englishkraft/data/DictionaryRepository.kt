@@ -65,33 +65,25 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
         val key = normalise(raw)
         if (key.isEmpty()) return null
 
-        // An exact headword match is only taken when it has something to say.
-        // `running` is its own headword in the corpus, but its only sense is
-        // "present participle and gerund of run" -- a pointer at another word,
-        // not a definition. Preferring it made the entry screen show a single
-        // circular sense while `run` sat one row away with every real sense.
+        // A comparative or superlative headword is a pointer like any other form-of
+        // entry. "better" has senses of its own, but they are all "comparative of
+        // good", so the exact-headword path returned "better" while `good` sat one
+        // row away. Irregular comparison is the common case here, not the exception.
         val exact = firstEntry(key)
         if (exact != null && !isOnlyAPointerToAnotherWord(exact.id)) {
             return build(exact, typedForm = null, inflected = false, beginnerSafe = beginnerSafe)
         }
-        // Keep the pointer entry: if nothing better exists, showing "the gerund of
-        // run" is still a correct and useful answer.
-        if (exact != null) {
-            val viaForm = bestFormEntry(key)
-            return if (viaForm != null) {
-                build(viaForm, typedForm = key, inflected = true, beginnerSafe = beginnerSafe)
-            } else {
-                build(exact, typedForm = null, inflected = false, beginnerSafe = beginnerSafe)
-            }
-        }
 
-        // Inflected form. A form can map to several entries — "books" is the plural
-        // of the noun and the third-person of the verb — so the most common sense
-        // of the headword wins, and the rest stay reachable from the entry.
+        // The typed word is either absent or is a pointer to another word — a
+        // comparative like "better", whose senses are all "comparative of good".
+        // Prefer the entry it points at, which has the real definitions.
         val viaForm = bestFormEntry(key, beginnerSafe)
         if (viaForm != null) {
             return build(viaForm, typedForm = key, inflected = true, beginnerSafe = beginnerSafe)
         }
+
+        // Nothing better exists. Showing "the gerund of run" is still a correct and
+        // useful answer, so the pointer entry is kept rather than returning nothing.
         return exact?.let {
             build(it, typedForm = null, inflected = false, beginnerSafe = beginnerSafe)
         }
@@ -280,6 +272,70 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
      * needs under "usage". The cut-offs are generous because the only goal is to
      * keep one-sentence demonstrations on screen.
      */
+    /**
+     * Whether a word is plausibly English rather than scanned-page damage.
+     *
+     * The corpus quotes from digitised books, and some of that text carries OCR
+     * errors: "abaet", "abeaut", "abidin", "d.j", "cnvs". Shown to a learner as a word
+     * to learn, that is worse than showing nothing — it teaches a spelling that has
+     * never existed. 48 such tokens appear in the reader's candidate pool of 4,000.
+     *
+     * The test is that a word contains a vowel. English has no vowel-less words of
+     * two letters or more, so this cannot reject a real word.
+     *
+     * A consonant-run test was tried and rejected: it flags "abstractive",
+     * "abstruse", "archbishop" and "archly", which are perfectly ordinary. It would
+     * have discarded good vocabulary to catch a much smaller problem.
+     */
+    internal fun looksLikeEnglish(word: String): Boolean {
+        // Honorifics and titles. "Mr", "Dr", "Mrs" are ordinary English words a
+        // learner needs, and they carry no vowel-free stem to test — an earlier vowel
+        // rule rejected them, which showed the rule was filtering the language rather
+        // than the damage. Measured: 52 sentences in the pool were lost to this
+        // before titles were allowed.
+        if (word.trimEnd('.') in TITLES) return true
+
+        // An abbreviation like "d.j" or "u.s" is a period-separated letter pair. This
+        // must be rejected BEFORE any trimming, because trimming the period turns
+        // "d.j" into "dj" — which contains a vowel and would sail through.
+        if (ABBREVIATION.matches(word)) return false
+
+        // A trailing apostrophe is a dropped letter, not a vowel: "plannin'", "y'know"
+        // and "makin'" are ordinary transcribed speech and valid to read.
+        val stem = word.trimEnd('\'')
+        if (stem.length < 2) return false
+
+        // A VOWEL must appear somewhere in the word -- not merely a letter. Written as
+        // `any { it in 'a'..'z' }` this accepts every word, because every character of
+        // a vowel-less token like "cnvs" is still a letter. English has no words of
+        // two letters or more without a vowel, so requiring one rejects the scanning
+        // damage without touching real vocabulary.
+        for (ch in stem) {
+            if (ch in 'a'..'z' || ch in 'A'..'Z') {
+                if (ch.lowercaseChar() in VOWELS) return true
+            }
+        }
+
+        // The only vowel left is the apostrophe itself, which is the elision case.
+        return word.endsWith('\'')
+    }
+
+    private val VOWELS = "aeiouy"
+
+    /**
+     * English titles. Case-sensitive on purpose: an upper-case "MR" in the middle of a
+     * sentence is a scanning artefact, while a capitalised "Mr" is a person being
+     * addressed.
+     */
+    private val TITLES = setOf(
+        "Mr", "Mrs", "Ms", "Dr", "Prof", "St", "Rev", "Hon", "Gen", "Col",
+        "Capt", "Lt", "Sgt", "Maj", "Cpl", "Pvt", "Fr", "Sr", "Jr", "Esq",
+        "Messrs", "Mmes", "Mme", "Mlle", "Mt", "Ft", "Rabbi", "Bish", "Gov",
+    )
+
+    /** "d.j", "u.s", "a.m" — single letters separated by periods. */
+    private val ABBREVIATION = Regex("^[A-Za-z]\\.[A-Za-z]$")
+
     private fun isUsableExample(text: String): Boolean {
         // An ellipsis marks an elided quotation rather than a sentence of usage.
         if (text.contains("[...]") || text.contains("[…]")) return false
@@ -482,10 +538,43 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
     fun rankOf(word: String): Int? {
         val key = normalise(word)
         if (key.isEmpty()) return null
+        // MIN(freq_rank) with the IS NOT NULL filter made SQLite choose idx_freq and
+        // scan the frequency index instead of using idx_entry_lc: EXPLAIN reported
+        // "SEARCH entry USING INDEX idx_freq (freq_rank>?)". Measured at 144 ms a call,
+        // which put the reader's passage search at an estimated 8,654 seconds.
+        // Filtering in the outer query keeps the B-tree on the headword.
         return db.rawQuery(
-            "SELECT MIN(freq_rank) FROM entry WHERE headword_lc = ? AND freq_rank IS NOT NULL",
+            "SELECT MIN(freq_rank) FROM (SELECT freq_rank FROM entry WHERE headword_lc = ?)",
             arrayOf(key),
         ).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getInt(0) else null }
+    }
+
+    /**
+     * Ranks for many words in one query.
+     *
+     * Used by the reader, which classifies every word of every candidate sentence.
+     * Doing that one query per word is the difference between 0.6 seconds and
+     * several minutes.
+     */
+    fun ranksOf(words: Collection<String>): Map<String, Int> {
+        if (words.isEmpty()) return emptyMap()
+        val keys = words.map { normalise(it) }.filter { it.isNotEmpty() }.distinct()
+        if (keys.isEmpty()) return emptyMap()
+        // SQLite caps a host parameter list, so chunk well below any limit.
+        val out = HashMap<String, Int>(keys.size * 2)
+        keys.chunked(400).forEach { chunk ->
+            val marks = chunk.joinToString(",") { "?" }
+            db.rawQuery(
+                "SELECT headword_lc, MIN(freq_rank) FROM entry " +
+                    "WHERE headword_lc IN ($marks) GROUP BY headword_lc",
+                chunk.toTypedArray(),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    if (!c.isNull(1)) out[c.getString(0)] = c.getInt(1)
+                }
+            }
+        }
+        return out
     }
 
     /**
@@ -537,7 +626,7 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
      */
     fun readingPassages(knownRank: Int, limit: Int = 6): List<String> {
         val out = ArrayList<String>()
-        for (sentence in candidateSentences()) {
+        for (sentence in readingPool()) {
             if (out.size >= limit) break
             val tokens = splitForRead(sentence, knownRank)
             if (tokens.isEmpty()) continue
@@ -550,23 +639,39 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
     /**
      * Candidate sentences for the reader.
      *
-     * Excluded here rather than by [isUsableExample] because this query wants a
-     * wide pool to filter, not one screen's worth: 4,000 candidates, and the level
-     * filter then keeps whichever suit the learner.
+     * Filters live here, in SQL, so the pool is small at the point it is built.
+     * A filter applied in Kotlin after the query does not shrink the pool, it just
+     * discards work already done — which is exactly what happened when the vowel rule
+     * ran only inside splitForRead while the pool was returned raw.
+     *
+     * The per-word vowel test is deliberately NOT here. It has to allow dropped
+     * letters, because "plannin'" and "y'know" are transcribed speech and valid to
+     * read, while "d.j" and "cnvs" are scanning damage.
      */
-    private fun candidateSentences(): List<String> =
+    /**
+     * The reader's sentence pool.
+     *
+     * Built by tools/build_sentences.py from Tatoeba: 20,000 short, plain,
+     * human-written English sentences, 1.10 MB of text. The previous source was the
+     * Wiktionary `example` column, which is whatever was needed to illustrate a word,
+     * and it produced a stage direction, a cricket report, a line of arithmetic and a
+     * social-media post -- each one passing every check, because every check asked
+     * something true of it.
+     *
+     * Tatoeba is CC BY 2.0 FR / CC0 1.0: public domain or attribution, with no
+     * share-alike, so it is a lighter obligation than the Wiktionary content the app
+     * already ships.
+     */
+    fun readingPool(): List<String> =
         db.rawQuery(
             """
-            SELECT DISTINCT example FROM sense
-            WHERE example IS NOT NULL
-              AND LENGTH(example) BETWEEN 55 AND 200
-              AND instr(example, '[...]') = 0
-              AND instr(example, 'ſ') = 0
-            ORDER BY example
-            LIMIT 4000
+            SELECT text FROM reading
+            WHERE instr(text, ' - ') = 0 AND instr(text, '...') = 0
+            ORDER BY id
+            LIMIT 60000
             """.trimIndent(),
             null,
-        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0).trim()) } }
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
 
     /** A word as the reader classifies it. */
     data class ReadToken(val text: String, val bare: String, val known: Boolean)
@@ -579,7 +684,27 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
      * glosses the app cannot supply. Stray brackets are dropped for the same
      * reason — they are citation markers, not vocabulary.
      */
-    fun splitForRead(sentence: String, knownRank: Int): List<ReadToken> {
+    /**
+     * Splits one sentence, resolving ranks individually.
+     *
+     * Fine for a handful of sentences. For a pool, call the overload that takes a
+     * prebuilt rank map — one query per word here is 144 ms and that adds up.
+     */
+    fun splitForRead(sentence: String, knownRank: Int): List<ReadToken> =
+        splitForRead(sentence, knownRank, ranksOf(wordsIn(listOf(sentence))))
+
+    /**
+     * Splits a sentence, classifying words against a rank lookup supplied by the caller.
+     *
+     * The reader classifies thousands of words across its candidate pool. Resolving
+     * each one with its own query cost 144 ms apiece and put a passage search at an
+     * estimated two hours. Passing the ranks in makes the whole pool cost one query.
+     */
+    fun splitForRead(
+        sentence: String,
+        knownRank: Int,
+        ranks: Map<String, Int>,
+    ): List<ReadToken> {
         val out = ArrayList<ReadToken>()
         var i = 0
         val len = sentence.length
@@ -605,14 +730,76 @@ class DictionaryRepository(private val db: SQLiteDatabase) {
                 break
             }
             val raw = sentence.substring(start, i)
-            val bare = raw.trim('\'', '-', '.')
-            // Anything outside the Latin range is a non-word for a modern reader.
+            // Possessives are a separate word. "Ranger's" is a form of "Ranger",
+            // and asking a learner to look up "Ranger's" returns nothing -- an
+            // instrumented test caught exactly this. Strip the trailing "'s" and
+            // keep the stem, which does resolve.
+            val (stem, possessive) = splitPossessive(raw.trim('\'', '-', '.'))
+            val bare = stem
             val isWord = bare.length >= 2 &&
                 bare.any { it.isLowerCase() } &&
-                bare.none { it.code > 0x2FF }
+                bare.none { it.code > 0x2FF } &&
+                looksLikeEnglish(bare)
             if (!isWord) continue
-            val r = rankOf(bare)
-            out.add(ReadToken(raw, bare, r != null && r <= knownRank))
+            // A compound is only treated as known when every part is. When a part is
+            // unknown the compound is unknown too, and then it must still resolve:
+            // the reader may only ask for words the app can open. Anything the
+            // dictionary cannot resolve is dropped from the ask-list rather than
+            // offered as a dead end.
+            val parts = bare.split('-').filter { it.isNotEmpty() }
+            val stemKnown = parts.size > 1 && parts.all { part ->
+                val pr = ranks[part.lowercase()]
+                pr != null && pr <= knownRank
+            }
+            val direct = ranks[bare.lowercase()]
+            val known = if (direct != null) direct <= knownRank else stemKnown
+            out.add(ReadToken(raw, bare, known))
+        }
+        return out
+    }
+
+    /**
+     * Splits a trailing possessive off a word.
+     *
+     * Returns the stem and whether one was present, so the display text can keep the
+     * apostrophe while the lookup uses the stem.
+     */
+    private fun splitPossessive(word: String): Pair<String, Boolean> {
+        for (suffix in POSSESSIVE_SUFFIXES) {
+            if (word.length > suffix.length && word.endsWith(suffix)) {
+                val stem = word.dropLast(suffix.length).trimEnd('\'')
+                if (stem.length >= 2) return stem to true
+            }
+        }
+        return word to false
+    }
+
+    private val POSSESSIVE_SUFFIXES = listOf("'s", "s'")
+
+    /** Words in a passage, so the caller can resolve them all at once. */
+    fun wordsIn(sentences: List<String>): Set<String> {
+        val out = HashSet<String>()
+        for (sentence in sentences) {
+            var i = 0
+            val len = sentence.length
+            while (i < len) {
+                val ch = sentence[i]
+                if (!ch.isLetter() && ch != '\'') {
+                    i++
+                    continue
+                }
+                val start = i
+                while (i < len && (sentence[i].isLetter() || sentence[i] == '\'')) i++
+                val bare = splitPossessive(
+                    sentence.substring(start, i).trim('\'')
+                ).first
+                if (bare.length >= 2 &&
+                    bare.any { it.isLowerCase() } &&
+                    bare.none { it.code > 0x2FF }
+                ) {
+                    out.add(bare.lowercase())
+                }
+            }
         }
         return out
     }

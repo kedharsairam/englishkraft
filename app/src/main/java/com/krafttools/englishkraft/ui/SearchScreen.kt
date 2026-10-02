@@ -18,7 +18,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +55,7 @@ fun SearchScreen(
     onQueryChange: (String) -> Unit,
     onSubmit: (String) -> Unit,
     onSuggestionClick: (String) -> Unit,
+    onOpenReader: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -153,6 +156,29 @@ fun SearchScreen(
                 .fillMaxSize()
                 .testTag("suggestion_list"),
         ) {
+            item(key = "read") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenReader)
+                        .padding(vertical = 14.dp)
+                        .testTag("open_reader"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Read",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "everyday English at your level",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            }
             items(suggestions, key = { it.headword + "/" + it.pos }) { suggestion ->
                 SuggestionRow(suggestion) { onSuggestionClick(suggestion.headword) }
             }

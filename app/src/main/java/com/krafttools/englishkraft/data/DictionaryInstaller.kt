@@ -28,7 +28,7 @@ class DictionaryInstaller(private val context: Context) {
         private const val TAG = "EnglishKraft.Dict"
 
         /** Bump when the schema or the corpus changes, so installs refresh. */
-        const val CORPUS_VERSION = 2
+        const val CORPUS_VERSION = 3
     }
 
     sealed interface State {

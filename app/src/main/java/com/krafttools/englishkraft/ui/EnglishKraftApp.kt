@@ -24,6 +24,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.krafttools.englishkraft.data.AppState
 import com.krafttools.englishkraft.data.AppViewModel
 import com.krafttools.englishkraft.data.Lookup
+import com.krafttools.englishkraft.data.ReaderViewModel
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -44,6 +47,10 @@ import java.util.Locale
 fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
     EnglishKraftTheme {
         var history by remember { mutableStateOf<List<Lookup>>(emptyList()) }
+        // Two destinations and no URL arguments worth serialising, so this is a
+        // sealed value rather than a NavHost.
+        var onReader by remember { mutableStateOf(false) }
+        var readerVm by remember { mutableStateOf<ReaderViewModel?>(null) }
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
         val search by viewModel.search.collectAsStateWithLifecycle()
@@ -63,6 +70,8 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
         }
 
         BackHandler(enabled = history.isNotEmpty()) { history = history.dropLast(1) }
+        // The reader's own BackHandler above fires first when it is open, so this one
+        // only ever sees the dictionary.
 
         Box(
             modifier = Modifier
@@ -92,8 +101,25 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                 )
 
                 is AppState.Ready -> {
-                    val current = history.lastOrNull()
-                    if (current == null) {
+                    val readerState = readerVm?.state?.collectAsState()
+                    val readerViewModel = readerVm
+                    if (readerViewModel != null) {
+                        LaunchedEffect(Unit) { readerViewModel.start() }
+                        BackHandler { readerVm = null }
+                        readerState?.value?.let { rs ->
+                            ReaderScreen(
+                                level = rs.level.toFloat(),
+                                levels = listOf(0.80f, 0.90f, 0.95f, 0.98f),
+                                passages = rs.passage?.sentences.orEmpty(),
+                                unknown = rs.passage?.unknown.orEmpty(),
+                                knownRank = rs.knownRank ?: 0,
+                                loading = rs.loading,
+                                onLevelChange = { readerViewModel.setLevel(it.toDouble()) },
+                                onNewPassage = readerViewModel::another,
+                                onWordClick = ::open,
+                            )
+                        }
+                    } else if (history.isEmpty()) {
                         SearchScreen(
                             query = search.query,
                             suggestions = search.suggestions,
@@ -101,10 +127,14 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                             onQueryChange = viewModel::onQueryChange,
                             onSubmit = ::open,
                             onSuggestionClick = ::open,
+                            onOpenReader = {
+                                readerVm = ReaderViewModel(state.repository)
+                                onReader = true
+                            },
                         )
                     } else {
                         EntryScreen(
-                            lookup = current,
+                            lookup = history.last(),
                             beginnerSafe = false,
                             starred = false,
                             onWordClick = ::open,

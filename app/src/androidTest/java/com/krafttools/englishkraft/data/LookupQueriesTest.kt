@@ -71,11 +71,15 @@ class LookupQueriesTest {
 
     @Test
     fun irregularInflectionsResolve() {
+        // Only words whose ONLY senses point at another word. "better" is deliberately
+        // absent: it looks like a pointer but has three senses of its own ("Greater
+        // in amount", "Greater or lesser", "Healed"), so returning it is correct and
+        // asserting it should reach "good" was asserting something false about English.
         val pairs = mapOf(
             "wolves" to "wolf",
             "wrote" to "write",
             "mice" to "mouse",
-            "better" to "good",
+            "ran" to "run",
         )
         for ((typed, lemma) in pairs) {
             val lookup = repo.lookup(typed)
