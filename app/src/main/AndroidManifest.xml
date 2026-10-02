@@ -11,7 +11,29 @@
   This manifest is the claim. If a permission ever appears here, the README's
   "no permissions" is false and a test must fail.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      androidx.core's manifest declares a signature-level permission of its own, so
+      that ContextCompat.registerReceiver can register a non-exported receiver. This
+      app registers no receiver at all: no broadcast, no service, no widget. So
+      both the declaration and the request were dead weight that contradicted the
+      claim above. They are removed rather than explained away: "zero permissions"
+      should be checkable, not arguable.
+
+      Removed after `aapt2 dump permissions` on the release APK reported one, while
+      `dumpsys package` on the device reported none. Both were true of the same build,
+      which is the problem. The claim had two readings and no test separating them.
+      `ZeroPermissionsTest` now asks the OS, on a device, what the installed app
+      requests.
+    -->
+    <permission
+        android:name="com.krafttools.englishkraft.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+    <uses-permission
+        android:name="com.krafttools.englishkraft.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
 
     <application
         android:name=".EnglishKraftApp"
