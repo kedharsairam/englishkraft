@@ -81,9 +81,19 @@ fun ReaderSentence(
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
                     )
                 )
+                append(raw)
+                // Popped inside the same branch that pushed it.
+                //
+                // This was `append(raw); pop()` unconditionally, which pops a style
+                // stack that is empty for the first word a reader has already met:
+                // java.lang.IllegalStateException: Nothing to pop, at
+                // AnnotatedString$Builder.pop. Every test passed because all of them
+                // are data tests; opening the reader on the phone was the only thing
+                // that ran this composable.
+                pop()
+            } else {
+                append(raw)
             }
-            append(raw)
-            pop()
             addStringAnnotation(WORD_TAG, bare, at, at + raw.length)
         }
     }
