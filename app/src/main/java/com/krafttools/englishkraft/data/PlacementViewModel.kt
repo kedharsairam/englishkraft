@@ -9,9 +9,10 @@ import kotlinx.coroutines.withContext
 /**
  * Where the learner stands.
  *
- * Held in a plain JSON file rather than SQLite. It is a handful of numbers, it is
- * written a few times per test, and a database for it would be machinery for a
- * record with four fields.
+ * SharedPreferences rather than SQLite: it is a handful of numbers, written a few times
+ * per test, and a database for it would be machinery for a record with four fields. The
+ * wordbook is not here — it has answers in it, and it lives in `progress.db` so that a
+ * corpus rebuild cannot touch it.
  */
 class Progress private constructor(private val app: Context) {
 
@@ -32,14 +33,6 @@ class Progress private constructor(private val app: Context) {
         get() = prefs.getLong(KEY_TAKEN, 0L)
         set(value) = prefs.edit().putLong(KEY_TAKEN, value).apply()
 
-    /** Words the learner has starred, as "headword/pos" so `run` and `runs` differ. */
-    fun starred(): Set<String> =
-        prefs.getStringSet(KEY_STARRED, emptySet()).orEmpty()
-
-    fun setStarred(items: Set<String>) {
-        prefs.edit().putStringSet(KEY_STARRED, items).apply()
-    }
-
     fun clear() {
         prefs.edit().clear().apply()
     }
@@ -48,7 +41,6 @@ class Progress private constructor(private val app: Context) {
         private const val KEY_RANK = "vocabulary_rank"
         private const val KEY_COVERAGE = "vocabulary_coverage"
         private const val KEY_TAKEN = "vocabulary_taken_at"
-        private const val KEY_STARRED = "starred"
 
         @Volatile
         private var instance: Progress? = null

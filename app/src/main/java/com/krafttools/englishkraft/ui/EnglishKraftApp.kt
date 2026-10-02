@@ -29,6 +29,9 @@ import com.krafttools.englishkraft.data.PlacementUiState
 import com.krafttools.englishkraft.data.PlacementViewModel
 import com.krafttools.englishkraft.data.Progress
 import com.krafttools.englishkraft.data.ReaderViewModel
+import com.krafttools.englishkraft.data.ReviewState
+import com.krafttools.englishkraft.data.Wordbook
+import com.krafttools.englishkraft.data.WordbookViewModel
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.Dispatchers
@@ -51,10 +54,11 @@ import java.util.Locale
 fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
     EnglishKraftTheme {
         var history by remember { mutableStateOf<List<Lookup>>(emptyList()) }
-        // Two destinations and no URL arguments worth serialising, so this is a
+        // Three destinations and no URL arguments worth serialising, so this is a
         // sealed value rather than a NavHost.
-        var onReader by remember { mutableStateOf(false) }
+        var destination by remember { mutableStateOf(Destination.Dictionary) }
         var readerVm by remember { mutableStateOf<ReaderViewModel?>(null) }
+        var reviewState by remember { mutableStateOf<ReviewState?>(null) }
         // Placement is a third destination. The saved level feeds the reader, which is
         // the whole reason to take it: without it the reader assumes 98%, which is
         // wrong for a beginner.
@@ -112,6 +116,37 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                 is AppState.Ready -> {
                     val placementHolder = placementVm
                     val progress = Progress.get(LocalContext.current)
+                    // One wordbook for the whole app, created once the corpus is open.
+                    // It owns `progress.db`, and there is only one wordbook.
+                    val wordbookVm = remember(state.repository) {
+                        WordbookViewModel(context, state.repository)
+                    }
+                    // The wordbook's contents live in state, not in the ViewModel's
+                    // database handle. Reading membership straight from SQLite on every
+                    // recomposition looked simpler and was wrong: the bookmark on the
+                    // entry screen never changed after a word was saved, because
+                    // nothing Compose was tracking had changed. Membership is now
+                    // derived from this list, so saving a word updates the icon.
+                    var wordbookCards by remember { mutableStateOf(emptyList<Wordbook.Card>()) }
+                    var wordbookDue by remember { mutableStateOf(0) }
+                    var wordbookAnswers by remember { mutableStateOf(0) }
+
+                    fun refreshWordbook() {
+                        scope.launch {
+                            val snapshot = withContext(Dispatchers.IO) {
+                                Triple(wordbookVm.all(), wordbookVm.dueCount(), wordbookVm.reviewCount())
+                            }
+                            wordbookCards = snapshot.first
+                            wordbookDue = snapshot.second
+                            wordbookAnswers = snapshot.third
+                        }
+                    }
+
+                    // Loaded once the corpus is open, so the search screen's wordbook
+                    // row and every bookmark show the truth on the first frame rather
+                    // than after the learner has opened the wordbook once.
+                    LaunchedEffect(state.repository) { refreshWordbook() }
+
                     if (placementHolder != null) {
                         BackHandler { placementVm = null; placementState = null }
                         when (val ps = placementState) {
@@ -168,28 +203,108 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                     } else {
                     val readerState = readerVm?.state?.collectAsState()
                     val readerViewModel = readerVm
-                    if (readerViewModel != null) {
-                        LaunchedEffect(Unit) { readerViewModel.start() }
-                        BackHandler { readerVm = null }
-                        readerState?.value?.let { rs ->
-                            ReaderScreen(
-                                level = rs.level.toFloat(),
-                                levels = listOf(0.80f, 0.90f, 0.95f, 0.98f),
-                                passages = rs.passage?.sentences.orEmpty(),
-                                unknown = rs.passage?.unknown.orEmpty(),
-                                knownRank = rs.knownRank ?: 0,
-                                loading = rs.loading,
-                                onLevelChange = {
-                                // Choosing a level by hand is how the placement result
-                                // is overridden, and it is remembered: a learner who
-                                // says "that is too hard" means it.
-                                readerViewModel.setLevel(it.toDouble())
-                            },
-                                onNewPassage = readerViewModel::another,
-                                onWordClick = ::open,
-                            )
+                    when (destination) {
+                        Destination.Wordbook -> {
+                            BackHandler { destination = Destination.Dictionary }
+                            if (wordbookCards.isEmpty()) {
+                                NothingSavedYet(
+                                    onBack = { destination = Destination.Dictionary },
+                                )
+                            } else {
+                                WordbookScreen(
+                                    cards = wordbookCards,
+                                    answerCount = wordbookAnswers,
+                                    now = System.currentTimeMillis(),
+                                    onReview = {
+                                        scope.launch {
+                                            reviewState = withContext(Dispatchers.IO) { wordbookVm.start() }
+                                            destination = Destination.Review
+                                        }
+                                    },
+                                    onOpenWord = { headword, pos ->
+                                        scope.launch {
+                                            val found = withContext(Dispatchers.IO) {
+                                                viewModel.lookup("$headword/$pos")
+                                            }
+                                            if (found != null) {
+                                                history = listOf(found)
+                                                destination = Destination.Dictionary
+                                            }
+                                        }
+                                    },
+                                    onRemove = { headword, pos ->
+                                        scope.launch {
+                                            withContext(Dispatchers.IO) { wordbookVm.remove(headword, pos) }
+                                            refreshWordbook()
+                                        }
+                                    },
+                                    onForgetAll = {
+                                        scope.launch {
+                                            withContext(Dispatchers.IO) { wordbookVm.clear() }
+                                            refreshWordbook()
+                                            destination = Destination.Dictionary
+                                        }
+                                    },
+                                    onBack = { destination = Destination.Dictionary },
+                                )
+                            }
                         }
-                    } else if (history.isEmpty()) {
+
+                        Destination.Review -> {
+                            BackHandler { destination = Destination.Wordbook; refreshWordbook() }
+                            val rs = reviewState
+                            if (rs == null || (rs.done && rs.answered == 0)) {
+                                NothingSavedYet(
+                                    onBack = { destination = Destination.Wordbook },
+                                )
+                            } else if (rs.done) {
+                                ReviewDone(
+                                    state = rs,
+                                    onDone = {
+                                        destination = Destination.Wordbook
+                                        refreshWordbook()
+                                    },
+                                )
+                            } else {
+                                ReviewScreen(
+                                    state = rs,
+                                    onReveal = { reviewState = wordbookVm.reveal() },
+                                    onAnswer = { grade ->
+                                        // Every answer is a write to progress.db and a
+                                        // read of the next card, so it cannot run on the
+                                        // main thread without a dropped frame on each tap.
+                                        scope.launch {
+                                            reviewState = withContext(Dispatchers.IO) {
+                                                wordbookVm.answer(grade)
+                                            }
+                                        }
+                                    },
+                                )
+                            }
+                        }
+
+                        Destination.Dictionary -> if (readerViewModel != null) {
+                            LaunchedEffect(Unit) { readerViewModel.start() }
+                            BackHandler { readerVm = null }
+                            readerState?.value?.let { rs ->
+                                ReaderScreen(
+                                    level = rs.level.toFloat(),
+                                    levels = listOf(0.80f, 0.90f, 0.95f, 0.98f),
+                                    passages = rs.passage?.sentences.orEmpty(),
+                                    unknown = rs.passage?.unknown.orEmpty(),
+                                    knownRank = rs.knownRank ?: 0,
+                                    loading = rs.loading,
+                                    onLevelChange = {
+                                    // Choosing a level by hand is how the placement result
+                                    // is overridden, and it is remembered: a learner who
+                                    // says "that is too hard" means it.
+                                    readerViewModel.setLevel(it.toDouble())
+                                },
+                                    onNewPassage = readerViewModel::another,
+                                    onWordClick = ::open,
+                                )
+                            }
+                        } else if (history.isEmpty()) {
                         SearchScreen(
                             query = search.query,
                             suggestions = search.suggestions,
@@ -199,7 +314,6 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                             onSuggestionClick = ::open,
                             onOpenReader = {
                                 readerVm = ReaderViewModel(state.repository, progress.vocabularyRank)
-                                onReader = true
                             },
                             onStartPlacement = {
                                 placementVm = PlacementViewModel(
@@ -211,15 +325,46 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
                                     }
                                 }
                             },
+                            onOpenWordbook = {
+                                refreshWordbook()
+                                destination = Destination.Wordbook
+                            },
                             placementTaken = progress.takenAt > 0L,
+                            savedCount = wordbookCards.size,
+                            dueCount = wordbookDue,
                         )
                     } else {
+                        val entry = history.last()
+                        // Derived from the wordbook state rather than queried, so that
+                        // saving a word flips the bookmark. `isSaved()` on the ViewModel
+                        // is a plain database read and Compose cannot see it change.
+                        val saved = wordbookCards.any {
+                            it.headword == entry.entry.headword && it.pos == entry.entry.pos
+                        }
                         EntryScreen(
-                            lookup = history.last(),
+                            lookup = entry,
                             beginnerSafe = false,
-                            starred = false,
+                            starred = saved,
                             onWordClick = ::open,
-                            onToggleStar = { },
+                            onToggleStar = {
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        // Saving reads the sense the learner was
+                                        // actually looking at, which is not always the
+                                        // first one: a word can be reached through an
+                                        // inflected form, and the entry it resolves to
+                                        // may open on a different sense.
+                                        val (gloss, usage) = wordbookVm.senseToSave(entry)
+                                        wordbookVm.toggle(
+                                            entry.entry.headword,
+                                            entry.entry.pos,
+                                            gloss,
+                                            usage,
+                                        )
+                                    }
+                                    refreshWordbook()
+                                }
+                            },
                             onSpeak = { text -> tts.speak(text) },
                         )
                     }
@@ -229,7 +374,22 @@ fun EnglishKraftApp(state: AppState, viewModel: AppViewModel) {
     }
 }
 }
+}
  /**
+ * The app's three screens.
+ *
+ * A sealed value rather than a routing library: there are three of them, none takes a
+ * URL, and the only state worth surviving a rotation is which word is open, which is
+ * already held here.
+ */
+private enum class Destination {
+    /** Search when nothing is open, and the entry screen when something is. */
+    Dictionary,
+    Wordbook,
+    Review,
+}
+
+/**
  * Text to speech on the device.
  *
  * On-device only: the engine is part of the phone, so this costs no network

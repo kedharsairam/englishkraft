@@ -57,8 +57,12 @@ fun SearchScreen(
     onSuggestionClick: (String) -> Unit,
     onOpenReader: () -> Unit,
     onStartPlacement: () -> Unit,
+    onOpenWordbook: () -> Unit,
     /** True once the learner has a saved level, which changes what the row offers. */
     placementTaken: Boolean,
+    /** Words saved, and how many are due. Zero means the row reads differently. */
+    savedCount: Int,
+    dueCount: Int,
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -201,6 +205,36 @@ fun SearchScreen(
                         text = "everyday English at your level",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            }
+            item(key = "wordbook") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenWordbook)
+                        .padding(vertical = 14.dp)
+                        .testTag("open_wordbook"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (savedCount > 0) "Wordbook" else "Save words to practise",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        // The due count is the only figure that changes what a learner
+                        // would do next, so it is the only one shown here.
+                        text = when {
+                            dueCount > 0 -> "$dueCount due"
+                            savedCount > 0 -> "$savedCount saved"
+                            else -> "nothing saved yet"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("wordbook_badge"),
                     )
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
